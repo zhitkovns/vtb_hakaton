@@ -4,7 +4,7 @@
 # Usage: ./run.sh
 
 # Configuration
-BUILD_DIR="../build/classes"
+BUILD_DIR="./build/classes"
 CONFIG_FILE="scanner-config.properties"
 PARSER_CLASS="com.securityscanner.scanner.OpenAPIParserSimple"
 SCANNER_CLASS="com.securityscanner.scanner.BankingAPIScanner"
