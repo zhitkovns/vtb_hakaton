@@ -3,10 +3,16 @@ package securityscanner.auditor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
-import securityscanner.core.ResponseValidator;
+import securityscanner.core.*;
 import securityscanner.core.model.Finding;
+import securityscanner.generator.ScenarioGenerator;
 import securityscanner.parser.OpenAPIParserSimple;
 import securityscanner.report.ReportWriter;
+
+// плагины
+import securityscanner.plugins.BolaPlugin;
+import securityscanner.plugins.MassAssignmentPlugin;
+import securityscanner.plugins.RateLimitPlugin;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -105,9 +111,9 @@ public class APISecurityAuditor {
     private String createConsentIfNeeded(String token) throws Exception {
         if (!createConsent) return null;
         if (requestingBank == null || requestingBank.isBlank())
-            throw new IllegalStateException("--create-consent requires --requesting-bank (usually your team id)");
+            throw new IllegalStateException("--create-consent requires --requesting-bank");
         if (interbankClientId == null || interbankClientId.isBlank())
-            throw new IllegalStateException("--create-consent requires --client <client_id_of_user> (e.g., team200-1)");
+            throw new IllegalStateException("--create-consent requires --client <client_id>");
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("client_id", interbankClientId);
@@ -147,91 +153,133 @@ public class APISecurityAuditor {
         }
     }
 
-    private void validateAndRecord(String endpoint, String method, Response r, JsonNode expectedSchema) {
-        List<Finding> vf = validator.validateContract(endpoint, method, r, expectedSchema);
-        findings.addAll(vf);
+    private void validateAndRecord(String endpoint, String method, Response r, JsonNode expectedSchema) throws Exception {
+        // нужно прочитать тело до конца, а затем пересобрать response для валидатора
+        String body = r.body()!=null? r.body().string() : "";
+        Response re = r.newBuilder()
+                .body(ResponseBody.create(body, MediaType.parse(r.header("Content-Type", "application/json"))))
+                .build();
+        findings.addAll(validator.validateContract(endpoint, method, re, expectedSchema));
     }
 
-    private void tryGetAccounts(String token, String consentId) throws Exception {
-        HttpUrl.Builder urlb = Objects.requireNonNull(HttpUrl.parse(baseUrl + "/accounts")).newBuilder();
-        if (interbankClientId != null && !interbankClientId.isBlank()) {
-            urlb.addQueryParameter("client_id", interbankClientId);
-        }
-        HttpUrl url = urlb.build();
+    private void runScenario(ScenarioGenerator.Scenario s, String token, String consentId, JsonNode openapiRoot, OpenAPIParserSimple parser) throws Exception {
+    // URL
+    HttpUrl.Builder ub = Objects.requireNonNull(HttpUrl.parse(baseUrl + s.path)).newBuilder();
+    s.query.forEach(ub::addQueryParameter);
+    String url = ub.build().toString();
 
-        Request.Builder rb = new Request.Builder().url(url).get();
-        rb.addHeader("Authorization", "Bearer " + token);
-        if (interbankClientId != null && !interbankClientId.isBlank()) {
-            if (requestingBank != null && !requestingBank.isBlank())
-                rb.addHeader("X-Requesting-Bank", requestingBank);
-            if (consentId != null && !consentId.isBlank())
-                rb.addHeader("X-Consent-Id", consentId);
-        }
-        applyExtraHeaders(rb);
+    // Headers
+    Request.Builder rb = new Request.Builder().url(url);
+    if (token != null && !token.isBlank()) rb.addHeader("Authorization", "Bearer " + token);
+    s.headers.forEach(rb::addHeader);
+    if (interbankClientId != null && s.query.containsKey("client_id")) {
+        if (requestingBank != null && rb.build().header("X-Requesting-Bank") == null)
+            rb.addHeader("X-Requesting-Bank", requestingBank);
+        if (consentId != null && rb.build().header("X-Consent-Id") == null)
+            rb.addHeader("X-Consent-Id", consentId);
+    }
+    applyExtraHeaders(rb);
 
-        log("GET " + url);
-        try (Response r = http.newCall(rb.build()).execute()) {
-            String body = r.body() != null ? r.body().string() : "";
-            System.out.println("/accounts -> " + r.code());
-            log(body);
-
-            // верни body в Response для валидатора (сделаем второй Response из строки)
-            Response re = r.newBuilder()
-                    .body(ResponseBody.create(body, MediaType.parse(r.header("Content-Type", "application/json"))))
-                    .build();
-
-            // Схема 200 application/json для /accounts
-            OpenAPIParserSimple parser = new OpenAPIParserSimple();
-            JsonNode schema = parser.resolveResponseSchema(openapiLocation, "/accounts", 200, r.header("Content-Type", "application/json"));
-            validateAndRecord("/accounts", "GET", re, schema);
-        }
+    // Method/body
+    if ("POST".equals(s.method) || "PUT".equals(s.method)) {
+        String json = s.body != null ? om.writeValueAsString(s.body) : "{}";
+        rb.method(s.method, RequestBody.create(json, MediaType.parse("application/json")));
+        log(s.method + " " + url + " Body:" + json);
+    } else {
+        rb.get();
+        log(s.method + " " + url);
     }
 
-    private void probeCommonPaths(String token, List<String> paths) throws Exception {
-        for (String p : paths) {
-            String url = baseUrl + p;
-            Request.Builder rb = new Request.Builder().url(url).get();
-            if (token != null && !token.isBlank()) rb.addHeader("Authorization", "Bearer " + token);
-            applyExtraHeaders(rb);
-            log("GET " + url);
-            try (Response r = http.newCall(rb.build()).execute()) {
-                System.out.println(p + " -> " + r.code());
-                String body = r.body() != null ? r.body().string() : "";
-                if (verbose) log(body);
-
-                Response re = r.newBuilder()
-                        .body(ResponseBody.create(body, MediaType.parse(r.header("Content-Type", "application/json"))))
-                        .build();
-
-                // попробуем валидацию, если есть схема (многие тех.эндпоинты без схем)
-                OpenAPIParserSimple parser = new OpenAPIParserSimple();
-                JsonNode schema = parser.resolveResponseSchema(openapiLocation, p, r.code(), r.header("Content-Type", "application/json"));
-                validateAndRecord(p, "GET", re, schema);
-            }
+    try (Response r = http.newCall(rb.build()).execute()) {
+        System.out.println(s.path + " ["+s.method+"/"+s.label+"] -> " + r.code());
+        String ct = r.header("Content-Type","application/json");
+        JsonNode schema = null;
+        try {
+            schema = parser.resolveResponseSchemaFromRoot(openapiRoot, s.path, r.code(), ct);
+        } catch (Exception ignore) {
+            // не валимся из-за схемы
         }
+        validateAndRecord(s.path, s.method, r, schema);
     }
+}
 
     public void run() throws Exception {
-        this.baseUrl = ensureBaseUrlFromOpenAPI(this.baseUrl);
-        if (baseUrl == null || baseUrl.isBlank())
-            throw new IllegalStateException("Base URL is empty. Provide --base-url or a spec with servers[].url");
-        System.out.println("Resolved base-url: " + baseUrl);
+    this.baseUrl = ensureBaseUrlFromOpenAPI(this.baseUrl);
+    if (baseUrl == null || baseUrl.isBlank())
+        throw new IllegalStateException("Base URL is empty. Provide --base-url or a spec with servers[].url");
+    System.out.println("Resolved base-url: " + baseUrl);
 
-        String token = resolveAccessToken();
+    String token = resolveAccessToken();
 
-        String consentId = null;
-        if (createConsent) {
-            consentId = createConsentIfNeeded(token);
+    OpenAPIParserSimple parser = new OpenAPIParserSimple();
+    JsonNode openapiRoot = parser.getOpenApiRoot(openapiLocation);
+
+    String consentId = null;
+    if (createConsent) consentId = createConsentIfNeeded(token);
+
+    try {
+        // сценарии
+        ScenarioGenerator gen = new ScenarioGenerator();
+        List<ScenarioGenerator.Scenario> scenarios = gen.generate(openapiRoot, requestingBank, interbankClientId);
+        for (ScenarioGenerator.Scenario s : scenarios) {
+            if ("DELETE".equals(s.method)) continue;
+            try { runScenario(s, token, consentId, openapiRoot, parser); }
+            catch (Exception ex) {
+                findings.add(Finding.of(s.path, s.method, 0, "RunnerError",
+                        Finding.Severity.LOW, "Scenario failed: " + ex.getMessage(), ""));
+            }
         }
 
-        tryGetAccounts(token, consentId);
-        probeCommonPaths(token, List.of("/health", "/", "/.well-known/jwks.json"));
+        // плагины
+        PluginRegistry reg = new PluginRegistry()
+                .register(new securityscanner.plugins.BolaPlugin())
+                .register(new securityscanner.plugins.MassAssignmentPlugin())
+                .register(new securityscanner.plugins.RateLimitPlugin());
 
-        // === Отчёты ===
+        ExecutionContext ctx = new ExecutionContext(
+                baseUrl, token, requestingBank, interbankClientId, consentId, verbose,
+                http, om, parser, openapiRoot, findings
+        );
+
+        for (SecurityPlugin p : reg.all()) {
+            try {
+                List<Finding> pf = p.run(ctx);
+                if (pf != null) findings.addAll(pf);
+            } catch (Exception ex) {
+                findings.add(Finding.of("(plugin)", "N/A", 0, p.id(),
+                        Finding.Severity.LOW, "Plugin error: " + ex.getMessage(), ""));
+            }
+        }
+
+        // тех. пути
+        probeCommonPaths(token, List.of("/health", "/", "/.well-known/jwks.json"), openapiRoot, parser);
+
+    } finally {
+        // ОТЧЁТЫ — пишем всегда
         var jsonFile = reportWriter.writeJson("Virtual Bank API Report", openapiLocation, baseUrl, findings);
         var pdfFile  = reportWriter.writePdf("Virtual Bank API Report", openapiLocation, baseUrl, findings);
         System.out.println("Reports:");
         System.out.println("  JSON: " + jsonFile.getAbsolutePath());
         System.out.println("  PDF : " + pdfFile.getAbsolutePath());
     }
+}
+
+    private void probeCommonPaths(String token, List<String> paths, JsonNode openapiRoot, OpenAPIParserSimple parser) throws Exception {
+    for (String p : paths) {
+        String url = baseUrl + p;
+        Request.Builder rb = new Request.Builder().url(url).get();
+        if (token != null && !token.isBlank()) rb.addHeader("Authorization", "Bearer " + token);
+        applyExtraHeaders(rb);
+        log("GET " + url);
+        try (Response r = http.newCall(rb.build()).execute()) {
+            System.out.println(p + " -> " + r.code());
+            String ct = r.header("Content-Type","application/json");
+            JsonNode schema = null;
+            try {
+                schema = parser.resolveResponseSchemaFromRoot(openapiRoot, p, r.code(), ct);
+            } catch (Exception ignore) {}
+            validateAndRecord(p, "GET", r, schema);
+        }
+    }
+}
 }

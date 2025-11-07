@@ -92,4 +92,36 @@ public class OpenAPIParserSimple {
         ObjectMapper om = new ObjectMapper();
         return om.readTree(json);
     }
+    public JsonNode resolveResponseSchemaFromRoot(JsonNode r, String path, int status, String contentType) {
+    if (r == null) return null;
+    JsonNode paths = r.path("paths");
+    if (paths.isMissingNode()) return null;
+
+    JsonNode pathNode = paths.path(path);
+    if (pathNode.isMissingNode()) return null;
+
+    JsonNode op = pathNode.path("get");
+    if (op.isMissingNode()) op = pathNode.path("post");
+    if (op.isMissingNode()) op = pathNode.path("put");
+    if (op.isMissingNode()) op = pathNode.path("delete");
+    if (op.isMissingNode()) return null;
+
+    String statusKey = String.valueOf(status);
+    JsonNode resp = op.path("responses").path(statusKey);
+    if (resp.isMissingNode()) resp = op.path("responses").path("default");
+    if (resp.isMissingNode()) return null;
+
+    JsonNode content = resp.path("content");
+    if (!content.isObject()) return null;
+
+    String ct = (contentType == null ? "application/json" : contentType.toLowerCase(Locale.ROOT));
+    if (ct.contains(";")) ct = ct.substring(0, ct.indexOf(';')).trim();
+
+    JsonNode ctNode = content.path(ct);
+    if (ctNode.isMissingNode()) ctNode = content.path("application/json");
+    if (ctNode.isMissingNode()) return null;
+
+    JsonNode schema = ctNode.path("schema");
+    return schema.isMissingNode() ? null : schema;
+}
 }
