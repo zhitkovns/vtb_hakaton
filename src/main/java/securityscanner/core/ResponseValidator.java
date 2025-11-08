@@ -11,6 +11,12 @@ import java.util.*;
 public class ResponseValidator {
 
     private final ObjectMapper om = new ObjectMapper();
+    private final JsonSchemaFactory factory;
+
+    public ResponseValidator() {
+        // Используем простую фабрику для совместимости
+        factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V7);
+    }
 
     public List<Finding> validateContract(String endpoint, String method,
                                           Response httpResp,
@@ -20,24 +26,38 @@ public class ResponseValidator {
         String body = "";
         try { body = httpResp.body() != null ? httpResp.body().string() : ""; } catch (Exception ignore){}
 
+        // Пропускаем валидацию для ошибок 429 (Rate Limiting)
+        if (code == 429) {
+            out.add(Finding.of(endpoint, method, code, "RateLimit",
+                    Finding.Severity.INFO, "Rate limiting active - skipping validation", bodySnippet(body)));
+            return out;
+        }
+
         // 1) content-type грубая проверка
         String ct = httpResp.header("Content-Type", "");
         if (expectedSchema != null && (ct == null || !ct.toLowerCase(Locale.ROOT).contains("application/json"))) {
             out.add(Finding.of(endpoint, method, code, "ContractMismatch",
                     Finding.Severity.LOW, "Unexpected Content-Type: " + ct, bodySnippet(body)));
-            // не выходим — возможно тело всё равно JSON
         }
 
         // 2) JSON Schema валидация, если есть схема и тело похоже на JSON
         if (expectedSchema != null && body != null && !body.isBlank() && looksLikeJson(body)) {
             try {
-                JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
                 JsonSchema schema = factory.getSchema(expectedSchema);
                 JsonNode node = om.readTree(body);
                 Set<ValidationMessage> errors = schema.validate(node);
+                
                 if (!errors.isEmpty()) {
                     StringBuilder sb = new StringBuilder();
-                    for (ValidationMessage e : errors) sb.append(e.getMessage()).append("; ");
+                    int errorCount = 0;
+                    for (ValidationMessage e : errors) {
+                        if (errorCount < 5) { // Ограничиваем количество ошибок в отчете
+                            sb.append(e.getMessage()).append("; ");
+                            errorCount++;
+                        }
+                    }
+                    if (errorCount >= 5) sb.append("... and ").append(errors.size() - 5).append(" more");
+                    
                     out.add(Finding.of(endpoint, method, code, "ContractMismatch",
                             Finding.Severity.MEDIUM, "Schema violations: " + sb, bodySnippet(body)));
                 } else {
@@ -45,11 +65,17 @@ public class ResponseValidator {
                             Finding.Severity.INFO, "Response matches schema", bodySnippet(body)));
                 }
             } catch (Exception ex) {
-                out.add(Finding.of(endpoint, method, code, "ContractValidationError",
-                        Finding.Severity.LOW, "Validator error: " + ex.getMessage(), bodySnippet(body)));
+                // Упрощаем сообщение об ошибке для проблем с референсами
+                String errorMsg = ex.getMessage();
+                if (errorMsg != null && errorMsg.contains("cannot be resolved")) {
+                    out.add(Finding.of(endpoint, method, code, "ContractValidationError",
+                            Finding.Severity.LOW, "Schema reference resolution issue", bodySnippet(body)));
+                } else {
+                    out.add(Finding.of(endpoint, method, code, "ContractValidationError",
+                            Finding.Severity.LOW, "Validator error: " + ex.getMessage(), bodySnippet(body)));
+                }
             }
         } else {
-            // если схемы нет — просто зафиксируем 200/код как инфо
             out.add(Finding.of(endpoint, method, code, "ContractCheck",
                     Finding.Severity.INFO, "No schema to validate or non-JSON body", bodySnippet(body)));
         }
@@ -57,6 +83,7 @@ public class ResponseValidator {
     }
 
     private static boolean looksLikeJson(String s) {
+        if (s == null) return false;
         String t = s.trim();
         return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));
     }

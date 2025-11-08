@@ -8,10 +8,10 @@ import securityscanner.http.RequestExecutor;
 
 import java.util.*;
 
-public class RateLimitPlugin implements SecurityPlugin {
-    @Override public String id() { return "API4:RateLimit"; }
-    @Override public String title() { return "Lack of Resources & Rate Limiting"; }
-    @Override public String description() { return "Быстрый бурст запросов и анализ 429/Retry-After."; }
+public class ResourceConsumptionPlugin implements SecurityPlugin {
+    @Override public String id() { return "API4:2023-ResourceConsumption"; }
+    @Override public String title() { return "Unrestricted Resource Consumption"; }
+    @Override public String description() { return "Проверка неограниченного потребления ресурсов (Rate Limiting)"; }
 
     @Override
     public List<Finding> run(ExecutionContext ctx) throws Exception {
