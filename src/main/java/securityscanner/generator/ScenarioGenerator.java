@@ -29,39 +29,57 @@ public class ScenarioGenerator {
         }
     }
 
-    public List<Scenario> generate(JsonNode openapiRoot, String requestingBank, String interbankClient) {
-        List<Scenario> out = new ArrayList<>();
-        JsonNode paths = openapiRoot.path("paths");
-        if (!paths.isObject()) return out;
+public List<Scenario> generate(JsonNode openapiRoot, String requestingBank, String interbankClient) {
+    List<Scenario> out = new ArrayList<>();
+    JsonNode paths = openapiRoot.path("paths");
+    if (!paths.isObject()) return out;
 
-        Iterator<String> it = paths.fieldNames();
-        while (it.hasNext()) {
-            String p = it.next();
-            JsonNode node = paths.path(p);
+    // Список эндпоинтов, которые нужно пропустить из-за проблем со схемой
+    Set<String> skipEndpoints = Set.of(
+        "/account-consents/request",
+        "/auth/bank-token", 
+        "/product-agreement-consents/request",
+        "/product-agreements"
+    );
 
-            for (String m : List.of("get","post","put","delete")) {
-                JsonNode op = node.path(m);
-                if (!op.isObject()) continue;
+    Iterator<String> it = paths.fieldNames();
+    while (it.hasNext()) {
+        String p = it.next();
+        
+        // Пропускаем проблемные эндпоинты
+        if (skipEndpoints.stream().anyMatch(p::contains)) {
+            continue;
+        }
 
-                Scenario s = new Scenario();
-                s.path = p;
-                s.method = m.toUpperCase(Locale.ROOT);
-                s.label = "positive";
-                // если это межбанковская зона /accounts и задан client_id — добавим query + заголовки
-                if ("/accounts".equals(p) && interbankClient != null && !interbankClient.isBlank()) {
-                    s.query.put("client_id", interbankClient);
-                    if (requestingBank != null && !requestingBank.isBlank())
-                        s.headers.put("X-Requesting-Bank", requestingBank);
-                    // X-Consent-Id подставит раннер после создания согласия
-                }
-                // если есть requestBody со schema — положим минимальный валидный объект
+        JsonNode node = paths.path(p);
+
+        for (String m : List.of("get","post","put","delete")) {
+            JsonNode op = node.path(m);
+            if (!op.isObject()) continue;
+
+            Scenario s = new Scenario();
+            s.path = p;
+            s.method = m.toUpperCase(Locale.ROOT);
+            s.label = "positive";
+            
+            // если это межбанковская зона /accounts и задан client_id — добавим query + заголовки
+            if ("/accounts".equals(p) && interbankClient != null && !interbankClient.isBlank()) {
+                s.query.put("client_id", interbankClient);
+                if (requestingBank != null && !requestingBank.isBlank())
+                    s.headers.put("X-Requesting-Bank", requestingBank);
+            }
+            
+            // Пропускаем создание тела для проблемных POST/PUT эндпоинтов
+            if (!p.contains("/consents") && !p.contains("/agreements")) {
                 JsonNode reqBody = op.path("requestBody").path("content").path("application/json").path("schema");
                 if (reqBody.isObject()) {
                     s.body = minimalValidJson(reqBody);
                 }
-                out.add(s);
+            }
+            out.add(s);
 
-                // Негатив (минимальный): убрать обязательный заголовок/параметр или испортить тип
+            // Негативные сценарии только для безопасных эндпоинтов
+            if (!p.contains("/auth") && !p.contains("/consents")) {
                 Scenario neg = s.copy();
                 neg.label = "negative";
                 if (neg.query.containsKey("client_id")) {
@@ -73,8 +91,9 @@ public class ScenarioGenerator {
                 out.add(neg);
             }
         }
-        return out;
     }
+    return out;
+}
 
 
     private JsonNode minimalValidJson(JsonNode schema) {

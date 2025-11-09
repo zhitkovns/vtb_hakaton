@@ -10,11 +10,17 @@ public class Finding {
     public Severity severity;
     public String message;
     public String evidence;    // кусок ответа/заголовков/trace
+    public String recommendation; // Рекомендация по исправлению
 
     public Finding() {}
 
     public static Finding of(String endpoint, String method, int status,
                              String owasp, Severity sev, String msg, String ev) {
+        return of(endpoint, method, status, owasp, sev, msg, ev, "");
+    }
+
+    public static Finding of(String endpoint, String method, int status,
+                             String owasp, Severity sev, String msg, String ev, String recommendation) {
         Finding f = new Finding();
         f.endpoint = endpoint;
         f.method = method;
@@ -23,6 +29,7 @@ public class Finding {
         f.severity = sev;
         f.message = msg;
         f.evidence = ev;
+        f.recommendation = recommendation;
         return f;
     }
 }

@@ -1,6 +1,5 @@
 package securityscanner.plugins;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.Response;
 import securityscanner.core.ExecutionContext;

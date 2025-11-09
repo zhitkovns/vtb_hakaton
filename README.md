@@ -1,50 +1,53 @@
-## 📁 **СТРУКТУРА ПРОЕКТА API SECURITY SCANNER**
+## **СТРУКТУРА ПРОЕКТА API SECURITY SCANNER**
 
 ```
 api-security-scanner/
-├── 📄 pom.xml
-├── 📄 README.md
-├── 📄 .gitignore
-├── 🎯 target/
-│   └── 📊 reports/
+├── pom.xml
+├── README.md
+├── run_scan.ps1
+├── .gitignore
+├── target/
+│   └── reports/
 │       ├── VirtualBankAPI-YYYYMMDD-HHMMSS.json
 │       └── VirtualBankAPI-YYYYMMDD-HHMMSS.pdf
-└── 📂 src/
-    └── 📂 main/
-        └── 📂 java/
-            └── 📂 securityscanner/
-                ├── 🎯 auditor/
-                │   └── 📄 APISecurityAuditor.java
-                ├── 🔧 core/
-                │   ├── 📄 ExecutionContext.java
-                │   ├── 📄 PluginRegistry.java
-                │   ├── 📄 SecurityPlugin.java
-                │   ├── 📄 ResponseValidator.java
-                │   └── 📂 model/
-                │       └── 📄 Finding.java
-                ├── 🎲 generator/
-                │   └── 📄 ScenarioGenerator.java
-                ├── 🌐 http/
-                │   └── 📄 RequestExecutor.java
-                ├── 📖 parser/
-                │   └── 📄 OpenAPIParserSimple.java
-                ├── 🔌 plugins/          # OWASP API Top 10 2023
-                │   ├── 📄 BolaPlugin.java                    # API1:2023
-                │   ├── 📄 BrokenAuthPlugin.java              # API2:2023
-                │   ├── 📄 ObjectPropertyAuthPlugin.java      # API3:2023
-                │   ├── 📄 ResourceConsumptionPlugin.java     # API4:2023
-                │   ├── 📄 BrokenFunctionAuthPlugin.java      # API5:2023
-                │   ├── 📄 BusinessFlowPlugin.java            # API6:2023
-                │   ├── 📄 SSRFPlugin.java                    # API7:2023
-                │   ├── 📄 SecurityMisconfigPlugin.java       # API8:2023
-                │   ├── 📄 InventoryManagementPlugin.java     # API9:2023
-                │   ├── 📄 UnsafeConsumptionPlugin.java       # API10:2023
-                │   └── 📄 InjectionPlugin.java               # Дополнительный
-                ├── 📊 report/
-                │   ├── 📄 ReportWriter.java
-                │   └── 📄 ResponseValidator.java
-                └── 🚀 runner/
-                    └── 📄 BankingAPIScanner.java
+└── src/
+    └── main/
+        └── java/
+            └── securityscanner/
+                ├── auditor/
+                │   └── APISecurityAuditor.java              # Главный класс аудитора
+                ├── core/
+                │   ├── ExecutionContext.java                # Контекст выполнения
+                │   ├── PluginRegistry.java                  # Реестр плагинов
+                │   ├── SecurityPlugin.java                  # Интерфейс плагинов безопасности
+                │   ├── BaseSecurityPlugin.java              # Базовый класс плагинов
+                │   ├── ResponseValidator.java               # Валидатор ответов API
+                │   └── model/
+                │       └── Finding.java                     # Модель найденной уязвимости
+                ├── generator/
+                │   └── ScenarioGenerator.java               # Генератор тестовых сценариев
+                ├── http/
+                │   └── RequestExecutor.java                 # HTTP клиент
+                ├── parser/
+                │   └── OpenAPIParserSimple.java             # Парсер OpenAPI спецификаций
+                ├── plugins/                                 # OWASP API Top 10 2023 плагины
+                │   ├── APIHealthPlugin.java                 # Проверка здоровья API
+                │   ├── AuthenticationPlugin.java            # API2:2023 Broken Authentication
+                │   ├── BolaPlugin.java                      # API1:2023 BOLA
+                │   ├── BrokenFunctionAuthPlugin.java        # API5:2023 Broken Function Level Authorization
+                │   ├── BusinessFlowPlugin.java              # API6:2023 Unrestricted Business Flows
+                │   ├── InjectionPlugin.java                 # Доп: SQL/NoSQL Injection
+                │   ├── InventoryManagementPlugin.java       # API9:2023 Inventory Management
+                │   ├── ObjectPropertyAuthPlugin.java        # API3:2023 Object Property Authorization
+                │   ├── ResourceConsumptionPlugin.java       # API4:2023 Resource Consumption
+                │   ├── SecurityHeadersPlugin.java           # API8: Security Headers Check
+                │   ├── SecurityMisconfigPlugin.java         # API8:2023 Security Misconfiguration
+                │   ├── SSRFPlugin.java                      # API7:2023 Server Side Request Forgery
+                │   └── UnsafeConsumptionPlugin.java         # API10:2023 Unsafe Consumption
+                ├── report/
+                │   └── ReportWriter.java                    # Генератор отчетов (JSON/PDF)
+                └── runner/
+                    └── BankingAPIScanner.java               # Главный класс запуска
 ```
 
 ---
