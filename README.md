@@ -1,4 +1,3 @@
-```markdown
 ## **СТРУКТУРА ПРОЕКТА API SECURITY SCANNER**
 
 ```
@@ -51,6 +50,7 @@ api-security-scanner/
                 │   └── ReportWriter.java
                 └── runner/                             # Точка входа
                     └── BankingAPIScanner.java
+
 ```
 
 ---
@@ -239,5 +239,3 @@ java -jar target/api-security-scanner-1.0-SNAPSHOT.jar --verbose
 - Необходимы корректные client_id и client_secret
 - Для полного тестирования требуется создание согласий
 - Сканирование может занимать несколько минут в зависимости от размера API (но менее 5 минут)
-
-```
