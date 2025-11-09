@@ -259,6 +259,52 @@ public class APISecurityAuditor {
         return null;
     }
 
+    /**
+     * Ожидает подтверждения согласия пользователем
+     */
+    private boolean waitForConsentApproval(String token, String consentId) throws Exception {
+        if (consentId == null || consentId.isBlank()) {
+            return false;
+        }
+
+        System.out.println("\n=== ОЖИДАНИЕ ПОДТВЕРЖДЕНИЯ СОГЛАСИЯ ===");
+        System.out.println("Создано согласие: " + consentId);
+        System.out.println("Клиент: " + interbankClientId);
+        System.out.println("Ожидание подтверждения пользователем...");
+        System.out.println("Таймаут: 300 секунд");
+        System.out.println("Для отмены нажмите Ctrl+C");
+
+        int maxAttempts = 60; // 60 попыток * 5 секунд = 300 секунд
+        int attempt = 0;
+
+        while (attempt < maxAttempts) {
+            attempt++;
+            
+            try {
+                Thread.sleep(5000); // Проверяем каждые 5 секунд
+            } catch (InterruptedException e) {
+                System.out.println("Ожидание прервано пользователем");
+                return false;
+            }
+
+            boolean isApproved = checkConsentStatus(token, consentId);
+            if (isApproved) {
+                System.out.println("Согласие подтверждено пользователем");
+                return true;
+            }
+
+            if (attempt % 6 == 0) { // Каждые 30 секунд
+                System.out.println("Ожидание... прошло " + (attempt * 5) + " секунд");
+            }
+        }
+
+        System.out.println("Таймаут ожидания подтверждения согласия (300 секунд)");
+        return false;
+    }
+
+    /**
+     * Проверяет статус согласия с детальным анализом
+     */
     private boolean checkConsentStatus(String token, String consentId) throws Exception {
         if (consentId == null || consentId.isBlank()) return false;
         
@@ -272,21 +318,53 @@ public class APISecurityAuditor {
         
         try (Response r = http.newCall(rb.build()).execute()) {
             String resp = r.body() != null ? r.body().string() : "";
+            log("Consent check response: " + resp);
             
             if (r.code() == 200) {
                 JsonNode node = om.readTree(resp);
-                String status = node.path("status").asText();
+                
+                // Пробуем разные пути к статусу
+                String status = null;
+                if (node.has("status")) {
+                    status = node.path("status").asText();
+                } else if (node.has("data") && node.get("data").has("status")) {
+                    status = node.get("data").get("status").asText();
+                }
+                
                 log("Consent status: " + status);
                 
-                if ("approved".equalsIgnoreCase(status) || "active".equalsIgnoreCase(status)) {
-                    System.out.println("Consent is active: " + consentId);
-                    return true;
-                } else {
-                    System.out.println("Consent status: " + status + " for " + consentId);
-                    return false;
+                if (status != null) {
+                    if ("approved".equalsIgnoreCase(status) || 
+                        "active".equalsIgnoreCase(status) ||
+                        "authorized".equalsIgnoreCase(status)) {
+                        System.out.println("Согласие подтверждено: " + status);
+                        return true;
+                    } else if ("rejected".equalsIgnoreCase(status) || "denied".equalsIgnoreCase(status)) {
+                        System.out.println("Согласие отклонено пользователем");
+                        return false;
+                    } else if ("expired".equalsIgnoreCase(status)) {
+                        System.out.println("Согласие истекло");
+                        return false;
+                    } else if ("pending".equalsIgnoreCase(status)) {
+                        System.out.println("Согласие ожидает подтверждения");
+                        return false;
+                    }
                 }
+                
+                // Дополнительные проверки для автоматического одобрения
+                if (node.has("auto_approved") && node.get("auto_approved").asBoolean()) {
+                    System.out.println("Согласие автоматически одобрено");
+                    return true;
+                }
+                
+                System.out.println("Статус согласия не определен или не поддерживается: " + status);
+                return false;
+            } else if (r.code() == 404) {
+                System.out.println("Согласие не найдено: " + consentId);
+                return false;
             } else {
-                log("Consent check failed: " + r.code());
+                System.out.println("Consent check failed with status: " + r.code());
+                log("Response: " + resp);
                 return false;
             }
         }
@@ -449,10 +527,22 @@ public class APISecurityAuditor {
             consentId = createConsentIfNeeded(token);
             
             if (consentId != null) {
-                if (checkConsentStatus(token, consentId)) {
+                // Ожидаем подтверждения согласия пользователем
+                boolean consentApproved = waitForConsentApproval(token, consentId);
+                
+                if (consentApproved) {
                     System.out.println("Using active consent: " + consentId);
                 } else {
-                    System.out.println("Consent may not be active, some tests may fail");
+                    System.out.println("Сканирование прервано: согласие не подтверждено пользователем");
+                    findings.add(Finding.of("/account-consents", "N/A", 0, "ConsentManagement",
+                            Finding.Severity.HIGH, 
+                            "Сканирование прервано - согласие не подтверждено", 
+                            "",
+                            "Пользователь должен подтвердить согласие в личном кабинете"));
+                    
+                    // Генерируем отчет о прерванном сканировании
+                    generateReports(consentId);
+                    return; // Завершаем выполнение
                 }
             } else {
                 System.out.println("Running without consent - sensitive endpoints will return 403");
@@ -466,6 +556,17 @@ public class APISecurityAuditor {
             System.out.println("Consent creation skipped by user request");
         }
 
+        // Запускаем основное сканирование
+        runSecurityScan(token, consentId, parser, openapiRoot);
+        
+        // Генерируем финальные отчеты
+        generateReports(consentId);
+    }
+
+    /**
+     * Выполняет основное сканирование безопасности
+     */
+    private void runSecurityScan(String token, String consentId, OpenAPIParser parser, JsonNode openapiRoot) throws Exception {
         try {
             ScenarioGenerator gen = new ScenarioGenerator();
             List<ScenarioGenerator.Scenario> scenarios = gen.generate(openapiRoot, requestingBank, interbankClientId);
@@ -508,35 +609,47 @@ public class APISecurityAuditor {
 
             probeCommonPaths(token, List.of("/health", "/", "/.well-known/jwks.json"), openapiRoot, parser);
 
-        } finally {
-            System.out.println("Generating reports...");
-            // Определяем название банка из baseUrl
-            String bankName = extractBankNameFromUrl(baseUrl);
-            String reportTitle = bankName + " API Security Report";
-
-            var jsonFile = reportWriter.writeJson(reportTitle, openapiLocation, baseUrl, findings);
-            var pdfFile  = reportWriter.writePdf(reportTitle, openapiLocation, baseUrl, findings);
-            
-            System.out.println("Total findings: " + findings.size());
-            
-            long highCount = findings.stream().filter(f -> f.severity == Finding.Severity.HIGH).count();
-            long mediumCount = findings.stream().filter(f -> f.severity == Finding.Severity.MEDIUM).count();
-            long lowCount = findings.stream().filter(f -> f.severity == Finding.Severity.LOW).count();
-            long infoCount = findings.stream().filter(f -> f.severity == Finding.Severity.INFO).count();
-            
-            System.out.println("High: " + highCount + ", Medium: " + mediumCount + 
-                              ", Low: " + lowCount + ", Info: " + infoCount);
-            
-            if (consentId != null) {
-                System.out.println("Consent used: " + consentId);
-            } else {
-                System.out.println("No consent used - limited testing performed");
-            }
-            
-            System.out.println("Reports:");
-            System.out.println("  JSON: " + jsonFile.getAbsolutePath());
-            System.out.println("  PDF : " + pdfFile.getAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("Security scan failed: " + e.getMessage());
+            findings.add(Finding.of("(scanner)", "N/A", 0, "ScanError",
+                    Finding.Severity.HIGH, 
+                    "Security scan failed: " + e.getMessage(), 
+                    "",
+                    "Проверьте доступность API и корректность конфигурации"));
         }
+    }
+
+    /**
+     * Генерирует финальные отчеты
+     */
+    private void generateReports(String consentId) throws Exception {
+        System.out.println("Generating reports...");
+        
+        String bankName = extractBankNameFromUrl(baseUrl);
+        String reportTitle = bankName + " API Security Report";
+
+        var jsonFile = reportWriter.writeJson(reportTitle, openapiLocation, baseUrl, findings);
+        var pdfFile  = reportWriter.writePdf(reportTitle, openapiLocation, baseUrl, findings);
+        
+        System.out.println("Total findings: " + findings.size());
+        
+        long highCount = findings.stream().filter(f -> f.severity == Finding.Severity.HIGH).count();
+        long mediumCount = findings.stream().filter(f -> f.severity == Finding.Severity.MEDIUM).count();
+        long lowCount = findings.stream().filter(f -> f.severity == Finding.Severity.LOW).count();
+        long infoCount = findings.stream().filter(f -> f.severity == Finding.Severity.INFO).count();
+        
+        System.out.println("High: " + highCount + ", Medium: " + mediumCount + 
+                          ", Low: " + lowCount + ", Info: " + infoCount);
+        
+        if (consentId != null) {
+            System.out.println("Consent used: " + consentId);
+        } else {
+            System.out.println("No consent used - limited testing performed");
+        }
+        
+        System.out.println("Reports:");
+        System.out.println("  JSON: " + jsonFile.getAbsolutePath());
+        System.out.println("  PDF : " + pdfFile.getAbsolutePath());
     }
 
     private void probeCommonPaths(String token, List<String> paths, JsonNode openapiRoot, OpenAPIParser parser) throws Exception {
@@ -573,6 +686,7 @@ public class APISecurityAuditor {
             }
         }
     }
+
     /**
      * Извлекает название банка из URL
      */
