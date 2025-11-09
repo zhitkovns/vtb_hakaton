@@ -21,12 +21,20 @@ if (Test-Path "scanner.env") {
 }
 
 # --- Bank selection ---
+Write-Host "`n=== BANK SELECTION ===" -ForegroundColor Green
+Write-Host "1 - Virtual Bank (vbank)"
+Write-Host "2 - Awesome Bank (abank)" 
+Write-Host "3 - Smart Bank (sbank)"
+
+if ($env:SELECTED_BANK) {
+    Write-Host "Current selection: $env:SELECTED_BANK" -ForegroundColor Yellow
+    $changeBank = Read-Host "Change bank? (y/n)"
+    if ($changeBank -eq 'y' -or $changeBank -eq 'Y') {
+        $env:SELECTED_BANK = $null
+    }
+}
+
 if (-not $env:SELECTED_BANK) {
-    Write-Host "`n=== BANK SELECTION ===" -ForegroundColor Green
-    Write-Host "1 - Virtual Bank (vbank)"
-    Write-Host "2 - Awesome Bank (abank)" 
-    Write-Host "3 - Smart Bank (sbank)"
-    
     do {
         $bankChoice = Read-Host "`nEnter bank number (1-3)"
         switch ($bankChoice) {
@@ -51,7 +59,7 @@ if (-not $env:SELECTED_BANK) {
         }
     } while (-not $env:SELECTED_BANK)
 } else {
-    Write-Host "Using pre-selected bank: $env:SELECTED_BANK" -ForegroundColor Yellow
+    Write-Host "Using bank: $env:SELECTED_BANK" -ForegroundColor Green
 }
 
 # --- Set URLs based on selected bank ---
@@ -67,6 +75,8 @@ Write-Host "Base URL: $BASEURL"
 if (-not $env:CLIENT_ID) {
     Write-Host "`n=== AUTHENTICATION ===" -ForegroundColor Green
     $env:CLIENT_ID = Read-Host "Enter CLIENT_ID"
+} else {
+    Write-Host "Using CLIENT_ID: $env:CLIENT_ID" -ForegroundColor Green
 }
 
 if (-not $env:CLIENT_SECRET) {
@@ -74,6 +84,8 @@ if (-not $env:CLIENT_SECRET) {
     $secureSecret = Read-Host -AsSecureString
     # Convert SecureString to plain text
     $env:CLIENT_SECRET = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureSecret))
+} else {
+    Write-Host "CLIENT_SECRET: [already set]" -ForegroundColor Green
 }
 
 # --- Client number selection ---
@@ -132,6 +144,21 @@ INTERBANK_CLIENT=$env:INTERBANK_CLIENT
     $envFileContent | Out-File -FilePath "scanner.env" -Encoding ASCII
     
     Write-Host "scanner.env created with values:"
+    Write-Host "SELECTED_BANK: $env:SELECTED_BANK"
+    Write-Host "CLIENT_ID: $env:CLIENT_ID"
+    Write-Host "INTERBANK_CLIENT: $env:INTERBANK_CLIENT"
+} else {
+    # Update existing scanner.env with new values
+    Write-Host "`nUpdating scanner.env file..." -ForegroundColor Green
+    $envFileContent = @"
+SELECTED_BANK=$env:SELECTED_BANK
+CLIENT_ID=$env:CLIENT_ID
+CLIENT_SECRET=$env:CLIENT_SECRET
+INTERBANK_CLIENT=$env:INTERBANK_CLIENT
+"@
+    $envFileContent | Out-File -FilePath "scanner.env" -Encoding ASCII
+    
+    Write-Host "scanner.env updated with values:"
     Write-Host "SELECTED_BANK: $env:SELECTED_BANK"
     Write-Host "CLIENT_ID: $env:CLIENT_ID"
     Write-Host "INTERBANK_CLIENT: $env:INTERBANK_CLIENT"
