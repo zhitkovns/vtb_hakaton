@@ -1,6 +1,7 @@
 package securityscanner.report;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.lowagie.text.*;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfPCell;
@@ -14,7 +15,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Генератор отчетов в форматах JSON и PDF
@@ -22,7 +27,7 @@ import java.util.*;
  */
 public class ReportWriter {
 
-    private final ObjectMapper om = new ObjectMapper();
+    private final ObjectMapper om = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
     private String reportsDir = "reports";
 
     /**
@@ -34,6 +39,24 @@ public class ReportWriter {
         public String baseUrl;
         public String generatedAt;
         public String bankName;
+        public String scannerVersion = "1.0";
+        public ScanSummary summary;
+
+        public Meta() {}
+    }
+
+    /**
+     * Сводка по сканированию
+     */
+    public static class ScanSummary {
+        public int totalFindings;
+        public int high;
+        public int medium;
+        public int low;
+        public int info;
+        public Map<String, Integer> owaspCounts = new HashMap<>();
+
+        public ScanSummary() {}
     }
 
     /**
@@ -42,6 +65,9 @@ public class ReportWriter {
     public static class Report {
         public Meta meta;
         public java.util.List<Finding> findings;
+        public ScanSummary summary;
+
+        public Report() {}
     }
 
     /**
@@ -54,6 +80,10 @@ public class ReportWriter {
      */
     public File writeJson(String title, String openapi, String baseUrl, java.util.List<Finding> findings) throws Exception {
         ensureReportsDir();
+        
+        // Создаем сводку
+        ScanSummary summary = createSummary(findings);
+        
         Report r = new Report();
         r.meta = new Meta();
         r.meta.title = title;
@@ -61,12 +91,40 @@ public class ReportWriter {
         r.meta.baseUrl = baseUrl;
         r.meta.generatedAt = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
         r.meta.bankName = extractBankNameFromUrl(baseUrl);
+        r.meta.summary = summary;
         r.findings = findings;
+        r.summary = summary;
 
         String name = generateReportName(extractBankCodeFromUrl(baseUrl), "json");
         File file = new File(reportsDir + "/" + name);
-        om.writerWithDefaultPrettyPrinter().writeValue(file, r);
+        om.writeValue(file, r);
         return file;
+    }
+
+    /**
+     * Создает сводку по findings
+     */
+    private ScanSummary createSummary(java.util.List<Finding> findings) {
+        ScanSummary summary = new ScanSummary();
+        summary.totalFindings = findings.size();
+        
+        // Подсчет по severity
+        summary.high = (int) findings.stream().filter(f -> f.severity == Finding.Severity.HIGH).count();
+        summary.medium = (int) findings.stream().filter(f -> f.severity == Finding.Severity.MEDIUM).count();
+        summary.low = (int) findings.stream().filter(f -> f.severity == Finding.Severity.LOW).count();
+        summary.info = (int) findings.stream().filter(f -> f.severity == Finding.Severity.INFO).count();
+        
+        // Подсчет по OWASP категориям
+        Map<String, Integer> owaspCounts = new HashMap<>();
+        for (Finding finding : findings) {
+            if (finding.owasp != null) {
+                String owaspCategory = finding.owasp.split(":")[0]; // Берем только категорию (API1, API2 и т.д.)
+                owaspCounts.put(owaspCategory, owaspCounts.getOrDefault(owaspCategory, 0) + 1);
+            }
+        }
+        summary.owaspCounts = owaspCounts;
+        
+        return summary;
     }
 
     /**

@@ -1,19 +1,41 @@
 package securityscanner.core.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 /**
  * Модель для представления найденной уязвимости или проблемы безопасности.
  * Содержит всю информацию о finding: эндпоинт, метод, статус, серьезность, рекомендации.
  */
 public class Finding {
-    public enum Severity { INFO, LOW, MEDIUM, HIGH }
+    public enum Severity { 
+        @JsonProperty("info") INFO, 
+        @JsonProperty("low") LOW, 
+        @JsonProperty("medium") MEDIUM, 
+        @JsonProperty("high") HIGH 
+    }
 
+    @JsonProperty("endpoint")
     public String endpoint;      // Эндпоинт API где найдена проблема
+    
+    @JsonProperty("method")  
     public String method;        // HTTP метод (GET, POST, PUT, DELETE)
+    
+    @JsonProperty("status")
     public int status;           // HTTP статус код ответа
+    
+    @JsonProperty("owasp")
     public String owasp;         // OWASP категория (например "API1:BOLA")
+    
+    @JsonProperty("severity")
     public Severity severity;    // Уровень серьезности проблемы
+    
+    @JsonProperty("message")
     public String message;       // Описание проблемы
+    
+    @JsonProperty("evidence")
     public String evidence;      // Доказательства (кусок ответа, заголовки)
+    
+    @JsonProperty("recommendation")
     public String recommendation; // Рекомендации по исправлению
 
     public Finding() {}
