@@ -42,7 +42,6 @@ api-security-scanner/
                 │   ├── InventoryManagementPlugin.java  # Управление инвентарем
                 │   ├── ObjectPropertyAuthPlugin.java   # Авторизация свойств
                 │   ├── ResourceConsumptionPlugin.java  # Потребление ресурсов
-                │   ├── SecurityHeadersPlugin.java      # Заголовки безопасности
                 │   ├── SecurityMisconfigPlugin.java    # Конфигурация
                 │   ├── SSRFPlugin.java                 # SSRF атаки
                 │   └── UnsafeConsumptionPlugin.java    # Потребление API
