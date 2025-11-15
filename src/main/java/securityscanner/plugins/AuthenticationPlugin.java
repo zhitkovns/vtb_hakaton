@@ -43,31 +43,36 @@ public class AuthenticationPlugin implements SecurityPlugin {
             String url = ctx.baseUrl + endpoint;
             Map<String, String> headers = new HashMap<>();
             headers.put("Authorization", "Bearer " + ctx.accessToken);
+            if (ctx.requestingBank != null) {
+                headers.put("X-Requesting-Bank", ctx.requestingBank);
+            }
             
             try (Response r = rex.get(url, headers)) {
                 if (r.code() == 401) {
+                    // Токен невалиден - проблема
                     out.add(Finding.of(endpoint, "GET", r.code(), id(),
                             Finding.Severity.HIGH,
                             "Токен аутентификации невалиден или просрочен",
-                            "",
-                            "Проверьте валидность токена, срок действия и права доступа"));
-                    break; // Достаточно одной ошибки 401
+                            "Эндпоинт вернул 401 Unauthorized",
+                            "Обновите токен аутентификации"));
+                    return;
                 } else if (r.code() == 403) {
-                    // 403 - токен валиден, но нет прав (нормально для некоторых эндпоинтов)
+                    // 403 - токен валиден, но нет прав
+                    // Не добавляем как проблему - это ожидаемое поведение
                     out.add(Finding.of(endpoint, "GET", r.code(), id(),
                             Finding.Severity.INFO,
-                            "Токен валиден, но недостаточно прав доступа",
-                            "",
-                            "Создайте consent для доступа к защищенным эндпоинтам"));
-                    break;
+                            "Токен валиден, но требуется consent для доступа",
+                            "Эндпоинт требует дополнительной авторизации",
+                            ""));
+                    return;
                 } else if (r.isSuccessful()) {
                     // Токен работает
                     out.add(Finding.of(endpoint, "GET", r.code(), id(),
                             Finding.Severity.INFO,
                             "Токен аутентификации валиден",
-                            "",
+                            "Успешный доступ к защищенному эндпоинту",
                             ""));
-                    break;
+                    return;
                 }
             } catch (Exception e) {
                 // Игнорируем ошибки подключения

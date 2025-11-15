@@ -181,7 +181,7 @@ public class APISecurityAuditor {
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("client_id", interbankClientId);
-        body.put("permissions", Arrays.asList("ReadAccountsDetail", "ReadBalances", "ReadTransactions"));
+        body.put("permissions", Arrays.asList("ReadAccountsDetail", "ReadBalances", "ReadTransactionsDetail"));
         body.put("reason", "Security scanning and penetration testing");
         body.put("requesting_bank", requestingBank);
         body.put("requesting_bank_name", "Security Scanner Team " + requestingBank);
@@ -289,7 +289,6 @@ public class APISecurityAuditor {
 
             boolean isApproved = checkConsentStatus(token, consentId);
             if (isApproved) {
-                System.out.println("Согласие подтверждено пользователем");
                 return true;
             }
 
@@ -337,7 +336,6 @@ public class APISecurityAuditor {
                     if ("approved".equalsIgnoreCase(status) || 
                         "active".equalsIgnoreCase(status) ||
                         "authorized".equalsIgnoreCase(status)) {
-                        System.out.println("Согласие подтверждено: " + status);
                         return true;
                     } else if ("rejected".equalsIgnoreCase(status) || "denied".equalsIgnoreCase(status)) {
                         System.out.println("Согласие отклонено пользователем");
@@ -371,29 +369,39 @@ public class APISecurityAuditor {
     }
 
     /**
-     * Проверяет валидность токена аутентификации
+     * Минимальная проверка токена - используется только если не удалось создать consent
+     * чтобы определить: проблема в токене или в чем-то другом
      */
-    private boolean validateToken(String token) throws Exception {
-        if (token == null || token.isBlank()) return false;
+    private boolean checkTokenMinimalValidation(String token) throws Exception {
+        if (token == null || token.isBlank()) {
+            System.out.println("Token is null or empty");
+            return false;
+        }
         
-        String testUrl = baseUrl + "/accounts";
+        // Простая проверка на публичном эндпоинте который не требует consent
+        String testUrl = baseUrl + "/products";
         Request.Builder rb = new Request.Builder().url(testUrl).get();
         rb.addHeader("Authorization", "Bearer " + token);
         applyExtraHeaders(rb);
         
         try (Response r = http.newCall(rb.build()).execute()) {
-            log("Token validation request: " + r.code());
-            boolean isValid = r.code() != 401 && r.code() != 403;
+            int code = r.code();
+            System.out.println("Minimal token check: " + testUrl + " -> " + code);
             
-            if (!isValid) {
-                findings.add(Finding.of("/auth", "N/A", 0, "AuthCheck",
-                        Finding.Severity.HIGH, 
-                        "Токен аутентификации не прошел проверку", 
-                        "Код ответа: " + r.code(),
-                        "Проверьте валидность токена, срок действия и права доступа"));
+            // Только 401 = токен невалиден, все остальное = токен валиден
+            // 403, 200, 404 - все это означает что токен валиден (сервер его принял)
+            boolean isValid = code != 401;
+            
+            if (isValid) {
+                System.out.println("Token is valid (received " + code + ")");
+            } else {
+                System.out.println("Token is INVALID (received 401)");
             }
             
             return isValid;
+        } catch (Exception e) {
+            System.out.println("Token check failed: " + e.getMessage());
+            return false;
         }
     }
 
@@ -512,55 +520,65 @@ public class APISecurityAuditor {
             throw new IllegalStateException("Base URL is empty. Provide --base-url or a spec with servers[].url");
         System.out.println("Resolved base-url: " + baseUrl);
 
+        // Шаг 1: Получаем токен
         String token = resolveAccessToken();
         
-        if (!validateToken(token)) {
-            System.out.println("WARNING: Token appears to be invalid. Some tests may fail.");
-        }
-
         OpenAPIParser parser = new OpenAPIParser();
         JsonNode openapiRoot = parser.getOpenApiRoot(openapiLocation);
 
-        String consentId = null;
-        if (createConsent) {
-            System.out.println("Creating consent for client: " + interbankClientId);
-            consentId = createConsentIfNeeded(token);
+        // Шаг 2: Создаем consent - это обязательное требование
+        System.out.println("Creating consent for client: " + interbankClientId);
+        String consentId = createConsentIfNeeded(token);
+
+        // Шаг 3: Проверяем результат создания consent
+        if (consentId != null) {
+            // Consent создался - токен точно валиден
+            System.out.println("Token validation: PASSED (consent created successfully: " + consentId + ")");
             
-            if (consentId != null) {
-                // Ожидаем подтверждения согласия пользователем
-                boolean consentApproved = waitForConsentApproval(token, consentId);
-                
-                if (consentApproved) {
-                    System.out.println("Using active consent: " + consentId);
-                } else {
-                    System.out.println("Сканирование прервано: согласие не подтверждено пользователем");
-                    findings.add(Finding.of("/account-consents", "N/A", 0, "ConsentManagement",
-                            Finding.Severity.HIGH, 
-                            "Сканирование прервано - согласие не подтверждено", 
-                            "",
-                            "Пользователь должен подтвердить согласие в личном кабинете"));
-                    
-                    // Генерируем отчет о прерванном сканировании
-                    generateReports(consentId);
-                    return; // Завершаем выполнение
-                }
+            // Ожидаем подтверждения согласия пользователем
+            boolean consentApproved = waitForConsentApproval(token, consentId);
+            
+            if (consentApproved) {
+                System.out.println("Using active consent: " + consentId);
+                // Запускаем полное сканирование с consent
+                runSecurityScan(token, consentId, parser, openapiRoot);
+                // Генерируем отчет после успешного сканирования
+                generateReports(consentId);
             } else {
-                System.out.println("Running without consent - sensitive endpoints will return 403");
+                System.out.println("Scanning aborted: consent not approved by user");
                 findings.add(Finding.of("/account-consents", "N/A", 0, "ConsentManagement",
-                        Finding.Severity.MEDIUM, 
-                        "Running without valid consent", 
+                        Finding.Severity.HIGH, 
+                        "Scanning aborted - consent not approved", 
                         "",
-                        "Создайте consent для полного тестирования защищенных эндпоинтов"));
+                        "User must approve consent in personal account"));
+                // Генерируем отчет о прерванном сканировании
+                generateReports(null);
             }
         } else {
-            System.out.println("Consent creation skipped by user request");
+            // Consent не создался - сканирование невозможно
+            System.out.println("Scanning aborted: cannot create consent");
+            
+            // Проверяем причину для диагностики
+            boolean isTokenValid = checkTokenMinimalValidation(token);
+            
+            if (!isTokenValid) {
+                findings.add(Finding.of("/auth", "N/A", 0, "AuthCheck",
+                        Finding.Severity.HIGH, 
+                        "Token validation failed - cannot create consent", 
+                        "Token is invalid or expired",
+                        "Check token validity and expiration"));
+            } else {
+                findings.add(Finding.of("/auth", "N/A", 0, "AuthCheck",
+                        Finding.Severity.HIGH,
+                        "Cannot create consent with valid token",
+                        "Possible permissions issue or consent service problem",
+                        "Check access permissions and consent service status"));
+            }
+            
+            // Генерируем отчет о прерванном сканировании
+            generateReports(null);
+            return;
         }
-
-        // Запускаем основное сканирование
-        runSecurityScan(token, consentId, parser, openapiRoot);
-        
-        // Генерируем финальные отчеты
-        generateReports(consentId);
     }
 
     /**
@@ -701,16 +719,62 @@ public class APISecurityAuditor {
     }
 
     private List<Finding> removeDuplicateFindings(List<Finding> findings) {
-    Set<String> seen = new HashSet<>();
-    List<Finding> uniqueFindings = new ArrayList<>();
-    
-    for (Finding finding : findings) {
-        String key = finding.endpoint + "|" + finding.method + "|" + finding.message + "|" + finding.owasp;
-        if (!seen.contains(key)) {
-            seen.add(key);
-            uniqueFindings.add(finding);
+        Map<String, Finding> uniqueMap = new LinkedHashMap<>();
+        
+        for (Finding finding : findings) {
+            String key = createFindingKey(finding);
+            
+            // Для security headers объединяем по типу заголовка, а не по эндпоинту
+            if (isSecurityHeaderFinding(finding)) {
+                key = "security_header|" + extractHeaderName(finding.message);
+            }
+            
+            // Сохраняем finding с максимальной severity или более конкретную информацию
+            if (!uniqueMap.containsKey(key) || shouldReplaceFinding(uniqueMap.get(key), finding)) {
+                uniqueMap.put(key, finding);
+            }
         }
+        
+        return new ArrayList<>(uniqueMap.values());
     }
-    return uniqueFindings;
+
+    private String createFindingKey(Finding finding) {
+        // Для security headers используем специальный ключ
+        if (isSecurityHeaderFinding(finding)) {
+            return "security_header|" + extractHeaderName(finding.message);
+        }
+        
+        // Для остальных findings обычный ключ
+        return finding.endpoint + "|" + finding.method + "|" + finding.status + "|" + 
+            finding.owasp + "|" + finding.message.substring(0, Math.min(40, finding.message.length()));
+    }
+
+    private boolean isSecurityHeaderFinding(Finding finding) {
+        return finding.message != null && (
+            finding.message.contains("X-Content-Type-Options") ||
+            finding.message.contains("X-Frame-Options") ||
+            finding.message.contains("X-XSS-Protection") ||
+            finding.message.contains("Content-Security-Policy") ||
+            finding.message.contains("Strict-Transport-Security")
+        );
+    }
+
+    private String extractHeaderName(String message) {
+        if (message.contains("X-Content-Type-Options")) return "X-Content-Type-Options";
+        if (message.contains("X-Frame-Options")) return "X-Frame-Options";
+        if (message.contains("X-XSS-Protection")) return "X-XSS-Protection";
+        if (message.contains("Content-Security-Policy")) return "Content-Security-Policy";
+        if (message.contains("Strict-Transport-Security")) return "Strict-Transport-Security";
+        return message;
+    }
+
+    private boolean shouldReplaceFinding(Finding existing, Finding newFinding) {
+        // Предпочитаем findings с evidence над findings без evidence
+        if (existing.evidence.isEmpty() && !newFinding.evidence.isEmpty()) return true;
+        // Предпочитаем более высокую severity
+        if (newFinding.severity.ordinal() > existing.severity.ordinal()) return true;
+        // Предпочитаем более короткие endpoint (основные а не конкретные)
+        if (isSecurityHeaderFinding(newFinding) && newFinding.endpoint.length() < existing.endpoint.length()) return true;
+        return false;
     }
 }

@@ -42,13 +42,6 @@ public class ResponseValidator {
 
         // Пропускаем валидацию для специфических случаев
         if (shouldSkipSchemaValidation(endpoint, code, expectedSchema)) {
-            if (expectedSchema == null && code < 500 && code >= 200) {
-                out.add(Finding.of(endpoint, method, code, "ContractCheck",
-                        Finding.Severity.INFO, 
-                        "Схема для валидации отсутствует", 
-                        bodySnippet(body),
-                        "Добавьте описание ответа в OpenAPI спецификацию"));
-            }
             return out;
         }
 
@@ -196,22 +189,19 @@ public class ResponseValidator {
     }
 
     /**
-     * Обрабатывает случаи когда ответ не в JSON формате или схема отсутствует
+     * Обрабатывает случаи когда ответ не в JSON формате
      */
     private void handleNonJsonResponse(String endpoint, String method, int code,
-                                     String body, JsonNode expectedSchema, List<Finding> out) {
-        if (expectedSchema == null) {
-            out.add(Finding.of(endpoint, method, code, "ContractCheck",
-                    Finding.Severity.INFO, 
-                    "Схема для валидации отсутствует", 
-                    bodySnippet(body),
-                    "Добавьте описание ответа в OpenAPI спецификацию"));
-        } else if (!looksLikeJson(body)) {
-            out.add(Finding.of(endpoint, method, code, "ContractCheck",
+                                    String body, JsonNode expectedSchema, List<Finding> out) {
+        
+        // Создаем findings только для реальных security проблем:
+        if (expectedSchema != null && !looksLikeJson(body) && code < 500 && code >= 200) {
+            // Это может быть security проблема - API возвращает не-JSON когда должна быть JSON схема
+            out.add(Finding.of(endpoint, method, code, "ContractMismatch",
                     Finding.Severity.LOW, 
-                    "Тело ответа не в JSON формате", 
+                    "Тело ответа не в JSON формате, но ожидается JSON по схеме", 
                     bodySnippet(body),
-                    "Убедитесь, что эндпоинт возвращает корректный JSON"));
+                    "Убедитесь, что эндпоинт возвращает корректный JSON согласно спецификации"));
         }
     }
 

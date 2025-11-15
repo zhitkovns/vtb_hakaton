@@ -18,9 +18,6 @@ public class PluginRegistry {
         return this;
     }
 
-    /**
-     * Регистрирует все плагины безопасности согласно OWASP API Top 10 
-     */
     public PluginRegistry registerAll() {
         return this
             .register(new securityscanner.plugins.APIHealthPlugin())           // Проверка здоровья API
@@ -32,7 +29,6 @@ public class PluginRegistry {
             .register(new securityscanner.plugins.BusinessFlowPlugin())        // API6: Unrestricted Business Flows
             .register(new securityscanner.plugins.SSRFPlugin())                // API7: Server Side Request Forgery
             .register(new securityscanner.plugins.SecurityMisconfigPlugin())   // API8: Security Misconfiguration
-            .register(new securityscanner.plugins.SecurityHeadersPlugin())     // API8: Security Headers Check
             .register(new securityscanner.plugins.InventoryManagementPlugin()) // API9: Inventory Management
             .register(new securityscanner.plugins.UnsafeConsumptionPlugin())   // API10: Unsafe Consumption
             .register(new securityscanner.plugins.InjectionPlugin());          // Доп: SQL/NoSQL Injection

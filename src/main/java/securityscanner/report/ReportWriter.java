@@ -102,7 +102,7 @@ public class ReportWriter {
     }
     
     /**
-     * Создает сводку по findings
+     * Создает сводку по findings с полным покрытием OWASP API Top 10
      */
     private ScanSummary createSummary(java.util.List<Finding> findings) {
         ScanSummary summary = new ScanSummary();
@@ -114,15 +114,50 @@ public class ReportWriter {
         summary.low = (int) findings.stream().filter(f -> f.severity == Finding.Severity.LOW).count();
         summary.info = (int) findings.stream().filter(f -> f.severity == Finding.Severity.INFO).count();
         
-        // Подсчет по всем категориям (OWASP + дополнительные проверки)
+        // Полный список OWASP API Top 10 категорий в порядке
         Map<String, Integer> categoryCounts = new HashMap<>();
+        
+        // OWASP API Security Top 10 (в порядке)
+        String[] owaspCategories = {
+            "API1", "API2", "API3", "API4", "API5", 
+            "API6", "API7", "API8", "API9", "API10"
+        };
+        
+        // Дополнительные проверки
+        String[] additionalCategories = {
+            "API", "ConsentManagement", "ContractMatch", "ContractCheck",
+            "API8:Injection", "API8:SecurityHeaders", "API8:SecurityMisconfig"
+        };
+        
+        // Инициализируем все OWASP категории с 0
+        for (String category : owaspCategories) {
+            categoryCounts.put(category, 0);
+        }
+        
+        // Инициализируем дополнительные категории с 0
+        for (String category : additionalCategories) {
+            categoryCounts.put(category, 0);
+        }
+        
+        // Подсчитываем реальные findings
         for (Finding finding : findings) {
             if (finding.owasp != null && !finding.owasp.isBlank()) {
-                // Берем основную категорию (до двоеточия если есть)
-                String category = finding.owasp.split(":")[0];
+                // Для OWASP категорий берем основную часть (API1, API2, etc)
+                String category = finding.owasp;
+                if (category.contains(":")) {
+                    category = category.split(":")[0];
+                }
+                
+                // Увеличиваем счетчик для категории
                 categoryCounts.put(category, categoryCounts.getOrDefault(category, 0) + 1);
+                
+                // Также считаем полные OWASP коды (API8:Injection и т.д.)
+                if (finding.owasp.contains(":")) {
+                    categoryCounts.put(finding.owasp, categoryCounts.getOrDefault(finding.owasp, 0) + 1);
+                }
             }
         }
+        
         summary.categoryCounts = categoryCounts;
         
         return summary;
@@ -158,7 +193,6 @@ public class ReportWriter {
         
         // Заголовок отчета с названием банка
         doc.add(new Paragraph(bankName + " API Security Report", h1));
-        doc.add(new Paragraph("OpenAPI: " + openapi, txt));
         doc.add(new Paragraph("Base URL: " + baseUrl, txt));
         doc.add(new Paragraph("Generated: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")), txt));
         doc.add(new Paragraph(" ", txt));
@@ -187,37 +221,84 @@ public class ReportWriter {
             doc.add(new Paragraph(" ", txt));
         }
 
-        // Security Findings by OWASP Category
-        doc.add(new Paragraph("Security Findings by OWASP Category:", h2));
-        
-        Map<String, Integer> owaspCounts = new HashMap<>();
-        Map<String, Integer> owaspSeverityCounts = new HashMap<>();
-        
-        for (Finding finding : findings) {
-            if (finding.owasp != null && finding.owasp.startsWith("API")) {
-                owaspCounts.put(finding.owasp, owaspCounts.getOrDefault(finding.owasp, 0) + 1);
-                
-                // Подсчет по severity для OWASP категорий
-                String severityKey = finding.owasp + "_" + finding.severity;
-                owaspSeverityCounts.put(severityKey, owaspSeverityCounts.getOrDefault(severityKey, 0) + 1);
-            }
-        }
-        
-        for (Map.Entry<String, Integer> entry : owaspCounts.entrySet()) {
-            StringBuilder severityBreakdown = new StringBuilder();
-            for (Finding.Severity severity : Finding.Severity.values()) {
-                String key = entry.getKey() + "_" + severity;
-                Integer count = owaspSeverityCounts.get(key);
-                if (count != null && count > 0) {
-                    severityBreakdown.append(severity).append(":").append(count).append(" ");
-                }
-            }
-            doc.add(new Paragraph(entry.getKey() + ": " + entry.getValue() + " findings (" + severityBreakdown.toString().trim() + ")", txt));
-        }
-        doc.add(new Paragraph(" ", txt));
+        // Security Findings by OWASP API Top 10 - строго по порядку
+        doc.add(new Paragraph("OWASP API Security Top 10 Security Assessment:", h2));
+        doc.add(new Paragraph(" "));
 
-        // Detailed Findings Table
-        doc.add(new Paragraph("Detailed Security Findings:\n", h2));
+        // Полный список OWASP категорий в порядке
+        String[][] owaspCategories = {
+            {"API1", "Broken Object Level Authorization", "Небезопасный доступ к объектам"},
+            {"API2", "Broken Authentication", "Проблемы аутентификации"}, 
+            {"API3", "Broken Object Property Level Authorization", "Небезопасный доступ к свойствам объектов"},
+            {"API4", "Unrestricted Resource Consumption", "Неограниченное потребление ресурсов"},
+            {"API5", "Broken Function Level Authorization", "Небезопасный доступ к функциям"},
+            {"API6", "Unrestricted Access to Sensitive Business Flows", "Неограниченный доступ к бизнес-процессам"},
+            {"API7", "Server Side Request Forgery", "Подделка запросов на стороне сервера"},
+            {"API8", "Security Misconfiguration", "Ошибки конфигурации безопасности"},
+            {"API9", "Improper Inventory Management", "Некорректное управление инвентарем"},
+            {"API10", "Unsafe Consumption of APIs", "Небезопасное потребление API"}
+        };
+
+        ScanSummary summary = createSummary(findings);
+
+        // Создаем таблицу для OWASP Top 10
+        PdfPTable owaspTable = new PdfPTable(4);
+        owaspTable.setWidthPercentage(100);
+        owaspTable.setWidths(new float[]{10, 30, 40, 20});
+        owaspTable.addCell(createCell("Category", h3));
+        owaspTable.addCell(createCell("Title", h3));
+        owaspTable.addCell(createCell("Description", h3));
+        owaspTable.addCell(createCell("Findings", h3));
+
+        for (String[] category : owaspCategories) {
+            String categoryCode = category[0];
+            Integer count = summary.categoryCounts.get(categoryCode);
+            if (count == null) count = 0;
+            
+            owaspTable.addCell(createCell(categoryCode, txt));
+            owaspTable.addCell(createCell(category[1], txt));
+            owaspTable.addCell(createCell(category[2], txt));
+            owaspTable.addCell(createCell(String.valueOf(count), txt));
+        }
+
+        doc.add(owaspTable);
+        doc.add(new Paragraph(" "));
+
+        // Дополнительные проверки
+        doc.add(new Paragraph("Additional Security Checks:", h2));
+        doc.add(new Paragraph(" "));
+
+        String[][] additionalChecks = {
+            {"API Health", "Проверка доступности эндпоинтов"},
+            {"Injection Testing", "Тестирование на SQL/NoSQL инъекции"},
+            {"Consent Management", "Управление согласиями"},
+            {"Contract Validation", "Валидация соответствия спецификации"}
+        };
+
+        PdfPTable additionalTable = new PdfPTable(3);
+        additionalTable.setWidthPercentage(100);
+        additionalTable.setWidths(new float[]{30, 50, 20});
+        additionalTable.addCell(createCell("Check Type", h3));
+        additionalTable.addCell(createCell("Description", h3));
+        additionalTable.addCell(createCell("Findings", h3));
+
+        for (String[] check : additionalChecks) {
+            String code = getCategoryCode(check[0]);
+            Integer count = summary.categoryCounts.get(code);
+            if (count == null) count = 0;
+            
+            additionalTable.addCell(createCell(check[0], txt));
+            additionalTable.addCell(createCell(check[1], txt));
+            additionalTable.addCell(createCell(String.valueOf(count), txt));
+        }
+
+        doc.add(additionalTable);
+        doc.add(new Paragraph(" "));
+
+        // Detailed Findings Table с отступом сверху
+        doc.add(new Paragraph("Detailed Security Findings:", h2));
+        doc.add(new Paragraph(" ")); // ДОБАВЛЕН ОТСТУП ПЕРЕД ТАБЛИЦЕЙ
+        
         PdfPTable table = new PdfPTable(5);
         table.setWidthPercentage(100);
         table.setWidths(new float[]{15, 8, 8, 20, 49});
@@ -372,6 +453,17 @@ public class ReportWriter {
         }
         
         return "General Security";
+    }
+    
+    /**
+     * Преобразует название проверки в код категории
+     */
+    private String getCategoryCode(String categoryName) {
+        if (categoryName.contains("Health")) return "API";
+        if (categoryName.contains("Injection")) return "API8:Injection"; 
+        if (categoryName.contains("Consent")) return "ConsentManagement";
+        if (categoryName.contains("Contract")) return "ContractMatch";
+        return categoryName;
     }
     
     /**

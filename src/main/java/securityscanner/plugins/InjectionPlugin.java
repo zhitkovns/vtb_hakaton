@@ -66,21 +66,86 @@ public class InjectionPlugin implements SecurityPlugin {
      */
     private void analyzeResponse(List<Finding> out, String endpoint, String method, 
                                int code, String payload, String body, String type) {
-        // Признаки возможной успешной инъекции
-        if (code == 500 || body.toLowerCase().contains("sql") || 
-            body.toLowerCase().contains("syntax") || body.toLowerCase().contains("error") ||
-            body.toLowerCase().contains("exception") || body.toLowerCase().contains("mongodb")) {
-            
+        
+        // ИГНОРИРУЕМ нормальные бизнес-ответы - это НЕ инъекции
+        if (isNormalBusinessResponse(code, body)) {
+            return; // Не создаем finding для нормальных ответов
+        }
+        
+        boolean isTruePositive = isTrueSqlInjection(code, body, payload, type);
+        
+        if (isTruePositive) {
             out.add(Finding.of(endpoint, method, code, id(),
                 Finding.Severity.HIGH, 
                 "Возможная " + type + " инъекция: " + payload, 
-                snippet(body)));
-        } else if (code == 200) {
-            out.add(Finding.of(endpoint, method, code, id(),
-                Finding.Severity.MEDIUM,
-                type + " инъекция не вызвала ошибку: " + payload,
-                snippet(body)));
+                snippet(body),
+                "Используйте параметризованные запросы и строгую валидацию входных данных"));
         }
+        // Убрана логика для MEDIUM severity при code=200 - это нормальное поведение
+    }
+
+    /**
+     * Определяет, является ли ответ нормальным бизнес-ответом (не инъекцией)
+     */
+    private boolean isNormalBusinessResponse(int code, String body) {
+        if (body == null || body.isEmpty()) return true;
+        
+        String lowerBody = body.toLowerCase();
+        
+        // Нормальные бизнес-ответы, которые НЕ являются инъекциями
+        return (code == 403 && (lowerBody.contains("consent_required") || 
+                               lowerBody.contains("insufficient_permissions") ||
+                               lowerBody.contains("forbidden"))) ||
+               (code == 401 && (lowerBody.contains("unauthorized") || 
+                               lowerBody.contains("authentication_required"))) ||
+               (code == 404 && (lowerBody.contains("not found") || 
+                               lowerBody.contains("not_found"))) ||
+               (code == 400 && (lowerBody.contains("validation error") || 
+                               lowerBody.contains("bad_request"))) ||
+               // Ответы с корректными данными - точно не инъекции
+               (code == 200 && (lowerBody.contains("\"data\"") || 
+                               lowerBody.contains("\"account\"") || 
+                               lowerBody.contains("\"product\"") ||
+                               lowerBody.contains("\"status\":\"ok\"")));
+    }
+
+    /**
+     * Строгая проверка настоящих SQL инъекций
+     */
+    private boolean isTrueSqlInjection(int code, String body, String payload, String type) {
+        // SQL инъекции обычно вызывают 500 ошибки или специфические ответы
+        if (code != 500 && code != 200) return false;
+        
+        String lowerBody = body.toLowerCase();
+        
+        if (type.equals("SQL")) {
+            // Специфические признаки SQL ошибок
+            boolean hasSqlError = (lowerBody.contains("sql") && 
+                   (lowerBody.contains("syntax") || 
+                    lowerBody.contains("near \"") ||
+                    lowerBody.contains("unknown column") ||
+                    lowerBody.contains("you have an error in your sql"))) ||
+                   (lowerBody.contains("postgresql") && lowerBody.contains("error")) ||
+                   (lowerBody.contains("oracle") && lowerBody.contains("exception")) ||
+                   (lowerBody.contains("mysql") && lowerBody.contains("error"));
+            
+            // Для 200 кодов - дополнительные проверки на успешную инъекцию
+            if (code == 200) {
+                return hasSqlError || 
+                       (lowerBody.contains("union") && lowerBody.contains("select") && 
+                        body.contains("1") && body.contains("2") && body.contains("3"));
+            }
+            
+            return hasSqlError;
+            
+        } else if (type.equals("NoSQL")) {
+            // Признаки NoSQL инъекций
+            return lowerBody.contains("mongodb") && 
+                   lowerBody.contains("error") &&
+                   (lowerBody.contains("bson") || lowerBody.contains("unexpected"));
+        }
+        
+        return false;
     }
 
     private static String snippet(String s) {

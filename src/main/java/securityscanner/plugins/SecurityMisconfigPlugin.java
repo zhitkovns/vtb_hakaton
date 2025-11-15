@@ -10,24 +10,75 @@ import java.util.*;
 
 /**
  * Плагин для проверки Security Misconfiguration - OWASP API8 
- * Проверяет типичные ошибки конфигурации безопасности
+ * Проверяет типичные ошибки конфигурации безопасности включая security headers
  */
 public class SecurityMisconfigPlugin implements SecurityPlugin {
     @Override public String id() { return "API8: SecurityMisconfig"; }
     @Override public String title() { return "Security Misconfiguration"; }
-    @Override public String description() { return "Проверка типичных misconfiguration"; }
+    @Override public String description() { return "Проверка типичных misconfiguration и security headers"; }
 
     @Override
     public List<Finding> run(ExecutionContext ctx) throws Exception {
         List<Finding> out = new ArrayList<>();
         RequestExecutor rex = new RequestExecutor(ctx.http, ctx.verbose);
 
-        // Проверка debug эндпоинтов и интерфейсов управления
-        String[] debugEndpoints = {"/debug", "/actuator", "/metrics", "/health", "/status", "/test"};
-        
         Map<String, String> headers = new HashMap<>();
         if (ctx.accessToken != null) headers.put("Authorization", "Bearer " + ctx.accessToken);
 
+        // 1. Проверка security headers на основном эндпоинте (чтобы избежать дублирования)
+        checkSecurityHeaders(out, ctx, rex, headers);
+
+        // 2. Проверка debug эндпоинтов и интерфейсов управления
+        checkDebugEndpoints(out, ctx, rex, headers);
+
+        return out;
+    }
+
+    /**
+     * Проверяет security headers на основном эндпоинте
+     */
+    private void checkSecurityHeaders(List<Finding> out, ExecutionContext ctx, RequestExecutor rex, Map<String, String> headers) throws Exception {
+        // Проверяем только корневой эндпоинт чтобы избежать дублирования
+        String url = ctx.baseUrl + "/";
+        try (Response r = rex.get(url, headers)) {
+            if (r.code() == 200) {
+                checkSecurityHeadersInResponse(out, "/", r);
+            }
+        } catch (Exception e) {
+            // Игнорируем недоступные эндпоинты
+        }
+    }
+
+    /**
+     * Проверяет security headers в ответе
+     */
+    private void checkSecurityHeadersInResponse(List<Finding> out, String endpoint, Response response) {
+        Map<String, HeaderCheck> securityHeaders = new LinkedHashMap<>();
+        securityHeaders.put("Strict-Transport-Security", new HeaderCheck(Finding.Severity.HIGH, "Отсутствует HSTS заголовок"));
+        securityHeaders.put("X-Content-Type-Options", new HeaderCheck(Finding.Severity.MEDIUM, "Отсутствует X-Content-Type-Options"));
+        securityHeaders.put("X-Frame-Options", new HeaderCheck(Finding.Severity.MEDIUM, "Отсутствует X-Frame-Options"));
+        securityHeaders.put("Content-Security-Policy", new HeaderCheck(Finding.Severity.MEDIUM, "Отсутствует Content-Security-Policy"));
+        securityHeaders.put("X-XSS-Protection", new HeaderCheck(Finding.Severity.LOW, "Отсутствует X-XSS-Protection"));
+
+        for (Map.Entry<String, HeaderCheck> header : securityHeaders.entrySet()) {
+            String value = response.header(header.getKey());
+            if (value == null || value.isBlank()) {
+                String headerKey = header.getKey();
+                out.add(Finding.of(endpoint, "GET", response.code(), id(),
+                    header.getValue().severity,
+                    header.getValue().getMessage(),
+                    "",
+                    "Добавьте security заголовок " + headerKey + " в ответы сервера"));
+            }
+        }
+    }
+
+    /**
+     * Проверяет debug эндпоинты и интерфейсы управления
+     */
+    private void checkDebugEndpoints(List<Finding> out, ExecutionContext ctx, RequestExecutor rex, Map<String, String> headers) throws Exception {
+        String[] debugEndpoints = {"/debug", "/actuator", "/metrics", "/status", "/test"};
+        
         for (String endpoint : debugEndpoints) {
             String url = ctx.baseUrl + endpoint;
             try (Response r = rex.get(url, headers)) {
@@ -46,37 +97,22 @@ public class SecurityMisconfigPlugin implements SecurityPlugin {
                 // Игнорируем ошибки подключения
             }
         }
-
-        // Проверка заголовков безопасности на основном эндпоинте
-        String mainUrl = ctx.baseUrl + "/accounts";
-        try (Response r = rex.get(mainUrl, headers)) {
-            checkSecurityHeaders(out, r, mainUrl);
-        } catch (Exception e) {
-            // Игнорируем если эндпоинт accounts недоступен
-        }
-
-        return out;
     }
 
     /**
-     * Проверяет наличие critical security headers в ответе
+     * Вспомогательный класс для хранения информации о проверяемом заголовке
      */
-    private void checkSecurityHeaders(List<Finding> out, Response response, String endpoint) {
-        Map<String, String> securityHeaders = Map.of(
-            "Strict-Transport-Security", "HIGH",
-            "X-Content-Type-Options", "MEDIUM", 
-            "X-Frame-Options", "MEDIUM",
-            "Content-Security-Policy", "MEDIUM"
-        );
-
-        for (Map.Entry<String, String> header : securityHeaders.entrySet()) {
-            String value = response.header(header.getKey());
-            if (value == null || value.isBlank()) {
-                out.add(Finding.of(endpoint, "GET", response.code(), id(),
-                    Finding.Severity.valueOf(header.getValue()),
-                    "Отсутствует security заголовок: " + header.getKey(),
-                    ""));
-            }
+    private static class HeaderCheck {
+        Finding.Severity severity;
+        String message;
+        
+        HeaderCheck(Finding.Severity severity, String message) {
+            this.severity = severity;
+            this.message = message;
+        }
+        
+        public String getMessage() {
+            return message;
         }
     }
 
